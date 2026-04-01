@@ -1,5 +1,11 @@
 node_modules/
 .env
 .vercel
+.nginx/nginx.generated.conf
+.nginx/cert.pem
+.nginx/key.pem
+.nginx/error.log
+.nginx/access.log
+.nginx/nginx.pid
 assets/abstract_concept.mov
 assets/ethereal_loop.mp4

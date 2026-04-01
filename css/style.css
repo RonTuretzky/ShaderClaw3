@@ -121,6 +121,18 @@ body {
   border-color: var(--accent);
 }
 
+#xr-btn {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+#xr-btn.xr-active {
+  color: var(--green);
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
 /* ── Error Bar ── */
 .error-bar {
   position: absolute;

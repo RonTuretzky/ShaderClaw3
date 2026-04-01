@@ -33,6 +33,16 @@ export function initCanvasControls(viewportEl) {
   });
   controls.appendChild(fsBtn);
 
+  // XR Immersive (shown only when WebXR available)
+  const xrBtn = document.createElement('button');
+  xrBtn.className = 'canvas-btn';
+  xrBtn.id = 'xr-btn';
+  xrBtn.textContent = 'VR';
+  xrBtn.title = 'Enter 360 Immersive Mode';
+  xrBtn.style.display = 'none';
+  xrBtn.addEventListener('click', () => emit('xr:toggle'));
+  controls.appendChild(xrBtn);
+
   // Screenshot
   const shotBtn = document.createElement('button');
   shotBtn.className = 'canvas-btn';

@@ -83,6 +83,55 @@
   const gestureProcessor = new GestureProcessor();
   let _ndiWs = null; // WS reference for NDI
 
+  // WebXR manager (Vision Pro 360 immersive)
+  const xrManager = new XRManager(isfRenderer, mediaPipeMgr, bus);
+  xrManager.checkSupport().then(ok => {
+    const btn = document.getElementById('xr-btn');
+    if (btn && ok) {
+      btn.style.display = '';
+      // Wire up click for hardcoded HTML buttons (index.html)
+      if (!btn._xrWired) {
+        btn._xrWired = true;
+        btn.addEventListener('click', () => bus.emit('xr:toggle'));
+      }
+    }
+  });
+  bus.on('xr:toggle', () => {
+    const btn = document.getElementById('xr-btn');
+    if (xrManager.active) {
+      xrManager.exit();
+      if (btn) btn.classList.remove('xr-active');
+    } else {
+      xrManager.enter().then(() => {
+        if (btn) btn.classList.add('xr-active');
+      }).catch(e => console.warn('XR enter failed:', e));
+    }
+  });
+  // When XR session ends, resume normal rAF loop
+  bus.on('xr:exit', () => {
+    const btn = document.getElementById('xr-btn');
+    if (btn) btn.classList.remove('xr-active');
+    requestAnimationFrame(compositionLoop);
+  });
+
+  // XR frame event: the XR session's rAF fires this to drive the comp loop
+  bus.on('xr:frame', ({ time, frame }) => {
+    try {
+      // Run composition loop (renders layers + compositor to compFBO)
+      compositionLoop(time);
+      // Draw the 360 sphere to the XR framebuffer
+      xrManager.onFrame(time, frame);
+    } catch (e) {
+      console.error('[XR] Frame error:', e);
+    }
+    // Always schedule next XR frame — missing a frame kills the session
+    if (xrManager.active && xrManager.session) {
+      xrManager.session.requestAnimationFrame((t, f) => {
+        bus.emit('xr:frame', { time: t, frame: f });
+      });
+    }
+  });
+
   // ===== LAYER DATA STRUCTURE =====
   const layers = [
     { id: 'shader', type: 'shader', visible: false, opacity: 1.0, blendMode: 'normal',
@@ -128,6 +177,13 @@
     _contextLost = true;
     _blitProg = null; _blitTexLoc = null; // Reset crossfade blit program
     layers.forEach(l => { l._transitionTex = null; l._transitionStart = null; l._pendingCompile = null; });
+    // Invalidate XR GL resources (will be rebuilt on next onFrame)
+    if (xrManager) {
+      xrManager._sphereProg = null;
+      xrManager._sphereVBO = null;
+      xrManager._sphereIBO = null;
+      xrManager.compFBO = null;
+    }
     console.warn('WebGL context lost — waiting for restore...');
     errorBar.textContent = 'WebGL context lost — recovering...';
     errorBar.classList.add('show');
@@ -6699,14 +6755,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   // ===== COMPOSITION LOOP =====
   function compositionLoop(timestamp) {
+    const _xrActive = xrManager && xrManager.active;
     if (!compositionPlaying || _contextLost || isfRenderer.gl.isContextLost()) {
       if (_compFrameCount < 3) dbg('compLoop SKIP: playing=' + compositionPlaying + ' ctxLost=' + _contextLost + ' glLost=' + isfRenderer.gl.isContextLost());
       _compFrameCount++;
-      requestAnimationFrame(compositionLoop);
+      // In XR mode, don't schedule — the xr:frame bus event drives the loop
+      if (!_xrActive) requestAnimationFrame(compositionLoop);
       return;
     }
-    // 30fps cap on mobile to reduce GPU/battery load
-    if (_isMobileComp && timestamp - _lastCompTime < 33) {
+    // 30fps cap on mobile — skip in XR mode (XR needs every frame submitted)
+    if (!_xrActive && _isMobileComp && timestamp - _lastCompTime < 33) {
       requestAnimationFrame(compositionLoop);
       return;
     }
@@ -7001,8 +7059,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       isfRenderer.renderLayerToFBO(canvasBg.shaderLayer, mediaPipeMgr);
     }
 
-    // 5. Compositor pass to screen
-    isfRenderer.renderCompositor(layers, sceneTexture, canvasBg);
+    // 5. Compositor pass (to screen or XR capture FBO)
+    if (xrManager && xrManager.active && xrManager.compFBO) {
+      isfRenderer.renderCompositor(layers, sceneTexture, canvasBg, xrManager.compFBO);
+    } else {
+      isfRenderer.renderCompositor(layers, sceneTexture, canvasBg);
+    }
 
     // 6. Projection window mirror
     if (projectionCtx && projectionWindow && !projectionWindow.closed) {
@@ -7013,7 +7075,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
     // 7. NDI send runs via its own requestAnimationFrame loop (Worker-based)
 
-    requestAnimationFrame(compositionLoop);
+    // 8. Schedule next frame
+    // When XR is active, the xr:frame bus event drives the loop — don't schedule here
+    if (!(xrManager && xrManager.active)) {
+      requestAnimationFrame(compositionLoop);
+    }
   }
 
   // compositionLoop() is now started inside loadDefaults after compositionPlaying = true
