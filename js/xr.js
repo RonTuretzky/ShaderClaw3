@@ -43,36 +43,49 @@ class XRManager {
     }
   }
 
+  // Wait for WebGL context to be valid (handles context loss/restore during XR init)
+  _waitForContext() {
+    const gl = this.renderer.gl;
+    if (!gl.isContextLost()) return Promise.resolve();
+    console.log('[XR] Waiting for WebGL context restore...');
+    return new Promise(resolve => {
+      const canvas = this.renderer.canvas;
+      const handler = () => {
+        canvas.removeEventListener('webglcontextrestored', handler);
+        // Give the restore handler a frame to rebuild core resources
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          console.log('[XR] Context restored, continuing XR setup');
+          this.gl = this.renderer.gl;
+          resolve();
+        }));
+      };
+      canvas.addEventListener('webglcontextrestored', handler);
+    });
+  }
+
   async enter() {
     if (this.active) return;
-    const gl = this.gl;
     console.log('[XR] Entering immersive mode...');
 
-    // Request immersive session FIRST (before makeXRCompatible which can cause context loss)
+    // Request immersive session
     this.session = await navigator.xr.requestSession('immersive-vr', {
       optionalFeatures: ['hand-tracking']
     });
     console.log('[XR] Session created');
 
-    // Make GL context XR-compatible — skip if it causes problems
-    // Safari on visionOS typically doesn't need this call
-    // If XRWebGLLayer constructor fails without it, we'll catch below
+    this.session.addEventListener('end', () => {
+      console.log('[XR] Session ended');
+      this.active = false;
+      this.session = null;
+      this.xrLayer = null;
+      this.bus.emit('xr:exit');
+    });
+
+    // Creating XRWebGLLayer may cause a context loss on visionOS Safari.
+    // We create the layer, then wait for context restore if needed,
+    // then build our GL resources (sphere, FBO) on the fresh context.
     try {
-      await gl.makeXRCompatible();
-      console.log('[XR] GL context is XR-compatible');
-    } catch (e) {
-      console.warn('[XR] makeXRCompatible skipped:', e);
-    }
-
-    // Wait a frame for any context restore to settle
-    await new Promise(r => requestAnimationFrame(r));
-
-    // If context was lost and restored, update our GL reference
-    this.gl = this.renderer.gl;
-
-    // Create XR layer from existing GL context
-    try {
-      this.xrLayer = new XRWebGLLayer(this.session, this.gl);
+      this.xrLayer = new XRWebGLLayer(this.session, this.renderer.gl);
     } catch (e) {
       console.error('[XR] XRWebGLLayer creation failed:', e);
       this.session.end();
@@ -83,29 +96,24 @@ class XRManager {
     console.log('[XR] XRWebGLLayer created, size:',
       this.xrLayer.framebufferWidth, 'x', this.xrLayer.framebufferHeight);
 
+    // Wait for context restore if context was lost
+    await this._waitForContext();
+    this.gl = this.renderer.gl;
+
     // Get reference space
     this.refSpace = await this.session.requestReferenceSpace('local');
     console.log('[XR] Reference space acquired');
 
-    // Create FBO to capture compositor output AFTER any context restore
+    // Build GL resources AFTER context is stable
     const w = Math.max(this.renderer.canvas.width, 960);
     const h = Math.max(this.renderer.canvas.height, 540);
     this.compFBO = this.renderer.createFBO(w, h);
     console.log('[XR] Compositor FBO created:', w, 'x', h);
 
-    // Build sphere geometry + shaders AFTER context is stable
     this._initSphere();
 
     this.active = true;
     this._frameCount = 0;
-
-    this.session.addEventListener('end', () => {
-      console.log('[XR] Session ended');
-      this.active = false;
-      this.session = null;
-      this.xrLayer = null;
-      this.bus.emit('xr:exit');
-    });
 
     // Kick-start the XR render loop
     this.session.requestAnimationFrame((t, frame) => {
