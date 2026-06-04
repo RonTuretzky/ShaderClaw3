@@ -116,15 +116,32 @@
 
   // XR frame event: the XR session's rAF fires this to drive the comp loop
   bus.on('xr:frame', ({ time, frame }) => {
+    // 1. Try to run the composition loop to fill compFBO with content.
+    //    If it fails or skips, onFrame still draws the sphere (with stale/empty texture).
     try {
-      // Run composition loop (renders layers + compositor to compFBO)
-      compositionLoop(time);
-      // Draw the 360 sphere to the XR framebuffer
+      if (compositionPlaying && !_contextLost && !isfRenderer.gl.isContextLost()) {
+        compositionLoop(time);
+      }
+    } catch (e) {
+      console.error('[XR] Composition error (non-fatal):', e);
+    }
+    // 2. Always draw the sphere to the XR framebuffer — missing a frame kills the session
+    try {
       xrManager.onFrame(time, frame);
     } catch (e) {
-      console.error('[XR] Frame error:', e);
+      console.error('[XR] Sphere render error:', e);
+      // Last resort: clear the XR framebuffer so at least we submit a frame
+      try {
+        const gl = isfRenderer.gl;
+        const layer = xrManager.xrLayer;
+        if (layer) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+          gl.clearColor(0, 0, 0, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+      } catch (_) {}
     }
-    // Always schedule next XR frame — missing a frame kills the session
+    // 3. Schedule next XR frame
     if (xrManager.active && xrManager.session) {
       xrManager.session.requestAnimationFrame((t, f) => {
         bus.emit('xr:frame', { time: t, frame: f });
@@ -6421,7 +6438,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   });
 
   // Start loading deferred scripts (model loaders) in background after init
-  requestIdleCallback ? requestIdleCallback(() => loadDeferredScripts()) : setTimeout(() => loadDeferredScripts(), 2000);
+  (typeof requestIdleCallback === 'function') ? requestIdleCallback(() => loadDeferredScripts()) : setTimeout(() => loadDeferredScripts(), 2000);
 
   // ===== SC3 UI PATCHES =====
 

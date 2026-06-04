@@ -35,10 +35,28 @@ class XRManager {
   }
 
   async checkSupport() {
-    if (!navigator.xr) return false;
+    // On visionOS Safari, navigator.xr may exist but isSessionSupported
+    // can return false even though immersive-vr works. Detect visionOS
+    // by user agent and always show the button there.
+    const isVisionOS = /Apple.*XR|visionOS|RealityDevice/i.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && 'xr' in navigator && navigator.maxTouchPoints > 0);
+    if (isVisionOS) {
+      console.log('[XR] visionOS detected, enabling VR button');
+      return true;
+    }
+    if (!navigator.xr) {
+      console.log('[XR] No navigator.xr');
+      return false;
+    }
     try {
-      return await navigator.xr.isSessionSupported('immersive-vr');
-    } catch {
+      for (const mode of ['immersive-vr', 'immersive-ar']) {
+        const supported = await navigator.xr.isSessionSupported(mode);
+        console.log('[XR] isSessionSupported(' + mode + '):', supported);
+        if (supported) return true;
+      }
+      return false;
+    } catch (e) {
+      console.log('[XR] isSessionSupported error:', e);
       return false;
     }
   }
@@ -67,10 +85,25 @@ class XRManager {
     if (this.active) return;
     console.log('[XR] Entering immersive mode...');
 
-    // Request immersive session
-    this.session = await navigator.xr.requestSession('immersive-vr', {
-      optionalFeatures: ['hand-tracking']
-    });
+    // Request immersive session — try immersive-vr first, fall back to immersive-ar
+    // (visionOS Safari may only support immersive-ar)
+    let session = null;
+    for (const mode of ['immersive-vr', 'immersive-ar']) {
+      try {
+        session = await navigator.xr.requestSession(mode, {
+          optionalFeatures: ['hand-tracking']
+        });
+        console.log('[XR] Session created with mode:', mode);
+        break;
+      } catch (e) {
+        console.warn('[XR] requestSession(' + mode + ') failed:', e.message);
+      }
+    }
+    if (!session) {
+      console.error('[XR] No immersive session mode available');
+      return;
+    }
+    this.session = session;
     console.log('[XR] Session created');
 
     this.session.addEventListener('end', () => {
