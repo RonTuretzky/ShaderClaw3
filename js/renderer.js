@@ -1328,13 +1328,19 @@ void main() {
     return this.compositorLocs[name];
   }
 
-  renderCompositor(layers, sceneTexture, bgState) {
+  async makeXRCompatible() {
+    return this.gl.makeXRCompatible();
+  }
+
+  renderCompositor(layers, sceneTexture, bgState, targetFBO) {
     const gl = this.gl;
     if (gl.isContextLost()) return;
     if (!this.compositorProgram) return;
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targetFBO ? targetFBO.fbo : null);
+    const rw = targetFBO ? targetFBO.width : this.canvas.width;
+    const rh = targetFBO ? targetFBO.height : this.canvas.height;
+    gl.viewport(0, 0, rw, rh);
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1342,7 +1348,7 @@ void main() {
     gl.useProgram(this.compositorProgram);
 
     const rLoc = this._getCompLoc('RENDERSIZE');
-    if (rLoc) gl.uniform2f(rLoc, this.canvas.width, this.canvas.height);
+    if (rLoc) gl.uniform2f(rLoc, rw, rh);
 
     // Bind layer textures (type-aware: scene layer uses sceneTexture, overlay/shader use FBO)
     // Perf: skip expensive texture bind + uniform calls for invisible layers
